@@ -1,0 +1,71 @@
+name: Docker CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ] # Запуск при каждом пуше в ветку main
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Клонируем репозиторий
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Установка зависимостей (нужен netcat для проверки портов)
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y netcat-openbsd
+
+      # 3. Логинимся в Docker Hub
+      # Использует секреты репозитория: DOCKERHUB_USERNAME и DOCKERHUB_TOKEN
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 4. Сборка и запуск контейнеров
+      - name: Build and Start Containers
+        run: docker-compose up -d --build
+
+      # 5. Проверка работоспособности (Health Check)
+      - name: Test Endpoints with Curl
+        run: |
+          echo "Ожидание запуска сервисов (15 секунд)..."
+          sleep 15
+          
+          echo "Проверка HTTP (порт 80)..."
+          curl -f http://localhost:80/index.php || exit 1
+          
+          echo "Проверка WebSocket (порт 8080)..."
+          nc -zv localhost 8080 || exit 1
+          
+          echo "Все сервисы успешно запущены и отвечают!"
+
+      # 6. Функциональный тест (проверка валидации пароля)
+      - name: Functional Test
+        run: |
+          # Имитируем попытку регистрации с коротким паролем
+          # Ожидаем, что сервер вернет ошибку о длине пароля
+          RESPONSE=$(curl -s -X POST -d "password=short" http://localhost:80/index.php)
+          if echo "$RESPONSE" | grep -q "Слишком короткий"; then
+             echo "Тест пройден: валидация пароля работает корректно."
+          else
+             echo "Тест провален: сервер не вернул ошибку валидации."
+             exit 1
+          fi
+
+      # 7. Пуш образов в Docker Hub (выполняется только если тесты прошли)
+      - name: Push Images to Docker Hub
+        run: |
+          docker-compose push
+
+      # 8. Остановка и очистка (выполняется всегда, даже если тесты упали)
+      - name: Shutdown and Cleanup
+        if: always()
+        run: docker-compose down --rmi all
