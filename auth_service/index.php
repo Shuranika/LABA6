@@ -52,7 +52,6 @@ if (isset($_GET['delete_id'])) {
     exit;
 }
 
-require_once 'db_connect.php';
 // --- 2. ОБРАБОТКА ВВОДА ---
 if ($method === 'POST') {
     if (ob_get_length()) ob_clean();
@@ -67,6 +66,8 @@ if ($method === 'POST') {
         echo json_encode(["message" => "🫖 Пароль слишком короткий (мин. 16 символов)!", "type" => "error"]);
         exit;
     }
+
+    require_once 'db_connect.php';
 
     $hash = hash('sha256', $password);
 

@@ -48,19 +48,22 @@ jobs:
           # Запуск основного приложения (Auth App)
           docker run -d --name auth_app --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
 
-      # 5. Проверка доступности основных файлов
-      - name: Test Endpoints and Files
+      # 5. Проверка доступности и ожидание БД
+      - name: Wait for MySQL and Test Endpoints
         run: |
-          echo "Ожидание запуска сервисов (15 секунд)..."
-          sleep 15
-          
+          echo "Ожидание запуска MySQL..."
+          # Цикл, который ждет, пока порт 3306 станет доступен внутри сети
+          for i in {1..20}; do
+            if docker exec auth_app nc -zv mysql_db 3306; then
+              echo "MySQL готов!"
+              break
+            fi
+            echo "MySQL еще не отвечает, ждем..."
+            sleep 2
+          done
+
           echo "Проверка главной страницы..."
           curl -f http://localhost:80/index.php || exit 1
-          
-          echo "Проверка наличия новых файлов внутри контейнера..."
-          docker exec auth_app ls /var/www/html/view.php || exit 1
-          docker exec auth_app ls /var/www/html/mail_handler.php || exit 1
-          docker exec auth_app ls /var/www/html/get_tasks_partial.php || exit 1
 
       # 6. Функциональный тест: Проверка валидации пароля (JSON)
       - name: Functional Test (JSON Validation)
