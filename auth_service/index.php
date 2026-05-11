@@ -62,8 +62,11 @@ if ($method === 'POST') {
     $action = $data['action'] ?? null;
 
     if (!$password || strlen($password) < 16) {
-        http_response_code(418);
-        echo json_encode(["message" => "🫖 Пароль слишком короткий (мин. 16 символов)!", "type" => "error"]);
+        http_response_code(418); // Установили статус
+        echo json_encode([
+                "message" => "🫖 Пароль слишком короткий!",
+                "type" => "error"
+        ]);
         exit;
     }
 
