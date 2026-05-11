@@ -31,21 +31,23 @@ jobs:
       # 4. Сборка образов и запуск контейнеров
       - name: Build and Start Containers
         run: |
-          # Создаем сеть для взаимодействия контейнеров
           docker network create lab_network
 
-          # Сборка образов с использованием секретов для тегов
+          # Сборка
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db ./mysql_db
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/database-service ./database_service
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/auth-container ./auth_service
 
-          # Запуск MySQL
-          docker run -d --name mysql_db --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
+          # Запуск MySQL (С ПАРАМЕТРАМИ ПОДКЛЮЧЕНИЯ)
+          docker run -d --name mysql_db --network lab_network \
+            -e MYSQL_ROOT_PASSWORD=root_pass \
+            -e MYSQL_DATABASE=todo_db \
+            ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
           
           # Запуск сервиса БД
           docker run -d --name database_service --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/database-service
           
-          # Запуск основного приложения (Auth App)
+          # Запуск основного приложения
           docker run -d --name auth-container --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-container
 
       # 5. Ждем, пока сайт и БД будут полностью готовы
@@ -65,7 +67,7 @@ jobs:
             echo "Попытка $i: Статус сервера [$STATUS]. Ждем..."
             sleep 5
           
-            if [ $i -eq 20 ]; then
+            if [ $i -eq 35 ]; then
               echo "❌ Сервисы не поднялись за отведенное время."
               docker logs auth-container
               exit 1

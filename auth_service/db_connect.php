@@ -2,7 +2,7 @@
 
 try {
     $host = 'mysql_db';
-    $db   = 'lab_db';
+    $db   = 'todo_db';
     $user = 'root';
     $pass = 'root_pass';
     $charset = 'utf8mb4';
