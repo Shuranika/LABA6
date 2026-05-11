@@ -11,11 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Копируем код из репозитория в виртуальную машину GitHub
+      # 1. Копируем код из репозитория
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Устанавливаем netcat (нужен для проверки доступности портов)
+      # 2. Устанавливаем netcat для проверки портов
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -28,58 +28,67 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 4. Сборка образов и запуск контейнеров вручную (без compose)
+      # 4. Сборка образов и запуск контейнеров
       - name: Build and Start Containers
         run: |
-          # Создаем виртуальную сеть Docker
+          # Создаем сеть для взаимодействия контейнеров
           docker network create lab_network
 
-          # Собираем образы (тегируем их вашим логином Docker Hub)
+          # Сборка образов с использованием секретов для тегов
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db ./mysql_db
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/database-service ./database_service
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/auth-app ./auth_service
 
-          # Запускаем контейнеры по очереди
-          # Контейнер с БД
+          # Запуск MySQL
           docker run -d --name mysql_db --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
           
-          # Контейнер сервиса базы данных
+          # Запуск сервиса БД
           docker run -d --name database_service --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/database-service
           
-          # Контейнер основного приложения (открываем порт 80 для тестов)
+          # Запуск основного приложения (Auth App)
           docker run -d --name auth_app --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
 
-      # 5. Проверка: поднялись ли сервисы
-      - name: Test Endpoints with Curl
+      # 5. Проверка доступности основных файлов
+      - name: Test Endpoints and Files
         run: |
-          echo "Ожидание запуска (15 секунд)..."
+          echo "Ожидание запуска сервисов (15 секунд)..."
           sleep 15
           
-          echo "Проверка доступности сайта (порт 80)..."
+          echo "Проверка главной страницы..."
           curl -f http://localhost:80/index.php || exit 1
           
-          echo "Проверка доступности порта 8080 (nc)..."
-          nc -zv localhost 8080 || echo "Порт 8080 не отвечает, но продолжаем..."
+          echo "Проверка наличия новых файлов внутри контейнера..."
+          docker exec auth_app ls /var/www/html/view.php || exit 1
+          docker exec auth_app ls /var/www/html/mail_handler.php || exit 1
+          docker exec auth_app ls /var/www/html/get_tasks_partial.php || exit 1
 
-      # 6. Функциональный тест валидации
-      - name: Functional Test
+      # 6. Функциональный тест: Проверка валидации пароля (JSON)
+      - name: Functional Test (JSON Validation)
         run: |
-          RESPONSE=$(curl -s -X POST -d "password=123" http://localhost:80,10/index.php)
-          if echo "$RESPONSE" | grep -q "Слишком короткий"; then
-             echo "Тест пройден: валидация работает."
+          # Отправляем JSON запрос с коротким паролем
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"password": "too_short_pass"}' \
+            http://localhost:80/index.php)
+          
+          echo "Ответ от сервера: $RESPONSE"
+          
+          # Проверяем, что сервер вернул ошибку валидации (сообщение о коротком пароле)
+          if echo "$RESPONSE" | grep -q "короткий"; then
+              echo "✅ Тест пройден: валидация JSON работает корректно."
           else
-             echo "Тест провален: ожидалась ошибка валидации."
-             exit 1
+              echo "❌ Тест провален: сервер не вернул ошибку на короткий пароль."
+              exit 1
           fi
 
-      # 7. Отправка готовых образов в ваш Docker Hub
+      # 7. Отправка готовых образов в Docker Hub
       - name: Push Images to Docker Hub
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/database-service
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
 
-      # 8. Очистка после работы
+      # 8. Очистка ресурсов
       - name: Shutdown and Cleanup
         if: always()
         run: |
