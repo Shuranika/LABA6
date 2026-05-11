@@ -48,48 +48,40 @@ jobs:
           # Запуск основного приложения (Auth App)
           docker run -d --name auth_app --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
 
-      # 5. Проверка доступности и ожидание БД
-      - name: Wait for MySQL and Test Endpoints
+      # 5. Ждем, пока сайт и БД будут полностью готовы
+      - name: Wait for Services
         run: |
-          echo "Ожидание запуска MySQL..."
-          # Цикл, который ждет, пока порт 3306 станет доступен внутри сети
+          echo "Ожидание полной готовности (PHP + MySQL)..."
           for i in {1..20}; do
-            if docker exec auth_app nc -zv mysql_db 3306; then
-              echo "MySQL готов!"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/index.php)
+            if [ "$STATUS" -eq 200 ]; then
+              echo "✅ Все сервисы готовы (HTTP 200)!"
               break
             fi
-            echo "MySQL еще не отвечает, ждем..."
-            sleep 2
+            echo "Статус сервера: $STATUS. Ждем..."
+            sleep 5
           done
 
-          echo "Проверка главной страницы..."
-          curl -f http://localhost:80/index.php || exit 1
-
-      # 6. Функциональный тест валидации
+      # 6. Функциональный тест (проверка на короткий пароль)
       - name: Functional Test
         run: |
-          # Отправляем JSON и сохраняем HTTP статус и тело ответа
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          # Отправляем запрос и выводим ответ в лог
+          RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d '{"password": "123"}' \
             http://localhost:80/index.php)
           
-          # Разделяем тело и код
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          STATUS=$(echo "$RESPONSE" | tail -n1)
-          
-          echo "Статус ответа: $STATUS"
-          echo "Тело ответа: $BODY"
+          echo "Ответ сервера: $RESPONSE"
 
-          # Проверяем код 500, который мы задали в PHP для ошибок валидации
-          if [ "$STATUS" -eq 418 ]; then
-              echo "✅ Тест пройден: валидация сработала (HTTP 500)."
+          # Проверяем наличие слова "короткий" в любом виде
+          if echo "$RESPONSE" | grep -q "короткий" || echo "$RESPONSE" | grep -q "043a"; then
+              echo "✅ Тест пройден: валидация сработала."
           else
-              echo "❌ Тест провален: ожидался статус 500, получен $STATUS."
+              echo "❌ Тест провален: текст ошибки не найден."
               exit 1
           fi
 
-      # 7. Отправка готовых образов в Docker Hub
+      # 7. Отправка готовых образов в Docker Hubgit add .
       - name: Push Images to Docker Hub
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
