@@ -62,14 +62,13 @@ if ($method === 'POST') {
     $action = $data['action'] ?? null;
 
     if (!$password || strlen($password) < 16) {
-        http_response_code(418); // Установили статус
+        http_response_code(500);
         echo json_encode([
-                "message" => "🫖 Пароль слишком короткий!",
+                "message" => "Пароль слишком короткий!",
                 "type" => "error"
         ]);
         exit;
     }
-
     require_once 'db_connect.php';
 
     $hash = hash('sha256', $password);
