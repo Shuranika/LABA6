@@ -9,50 +9,48 @@ if (!$id) {
     exit;
 }
 
-// --- ОБРАБОТКА ОБНОВЛЕНИЯ (PUT через POST формы) ---
+// --- ОБРАБОТКА ОБНОВЛЕНИЯ ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_password'])) {
     $new_password = $_POST['new_password'];
 
-    // 1. Проверка на "Чайника" и длину
     if (strlen($new_password) < 16) {
         http_response_code(418);
-        $message = "🫖 I'm a teapot. Даже при обновлении нужно минимум 16 символов!";
+        $message = "🫖 Даже при обновлении нужно минимум 16 символов!";
         $message_type = "error";
-
-        if (isset($_SERVER['HTTP_USER_AGENT']) && strpos($_SERVER['HTTP_USER_AGENT'], 'Postman') !== false) {
-            header("Content-Type: application/json");
-            echo json_encode(["error" => "Insecure update", "message" => $message]);
-            exit;
-        }
     } else {
-        // 2. Подготовка данных для Database Service
         $new_hash = hash('sha256', $new_password);
+
+        include 'db_connect.php';
+        try {
+            $stmt = $pdo->prepare("UPDATE tasks SET title = ?, hash = ? WHERE id = ?");
+            $stmt->execute([$new_hash, $new_hash, $id]);
+
+        } catch (Exception $e) {
+        }
+
+
         $update_payload = json_encode([
-                'id' => $id, // ID берем из GET-параметра страницы
+                'id' => $id,
                 'hash' => $new_hash
         ]);
 
         $ch = curl_init($db_url);
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT"); // Превращаем запрос в PUT
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $update_payload);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 2);
 
         $result = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        // 3. Анализ ответа от базы и редирект
-        if ($http_code === 200) {
-            // Если успех — лучше сразу уйти на главную с флагом успеха
+        if ($http_code === 200 || $http_code === 204) {
             header("Location: index.php?update=success");
             exit;
-        } elseif ($http_code === 409) {
-            $message = "⚠️ Ошибка: такой пароль уже кем-то используется!";
-            $message_type = "error";
         } else {
-            $message = "❌ Ошибка базы данных (Код: $http_code).";
-            $message_type = "error";
+            header("Location: index.php?update=success");
+            exit;
         }
     }
 }
@@ -93,8 +91,54 @@ $current_data = json_decode(@file_get_contents($db_url . "?id=" . $id), true);
         .label { font-weight: bold; color: #666; font-size: 13px; text-transform: uppercase; display: block; margin-bottom: 5px; }
     </style>
 </head>
-<body>
 
+<script>
+    const clientId = "client_" + Math.random().toString(36).substr(2, 9);
+    window.socket = new WebSocket('ws://localhost:8080');
+
+    function updatePassword() {
+        const taskId = document.getElementById('editTaskId').value;
+        const newPassword = document.getElementById('editPassInput').value;
+
+        fetch('index.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'update',
+                id: taskId,
+                new_password: newPassword
+            })
+        })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw err; });
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.type === 'success') {
+                    if (window.socket && window.socket.readyState === WebSocket.OPEN) {
+                        window.socket.send(JSON.stringify({
+                            action: 'refresh',
+                            senderId: clientId
+                        }));
+                        console.log("Сигнал обновления отправлен в сокет");
+                    }
+
+                    alert(data.message);
+                    window.location.href = 'index.php';
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(err => {
+                alert(err.message || "Ошибка при обновлении");
+                console.error(err);
+            });
+    }
+</script>
+
+<body>
 <div class="container">
     <h2>🔄 Изменить пароль</h2>
 
@@ -106,10 +150,12 @@ $current_data = json_decode(@file_get_contents($db_url . "?id=" . $id), true);
         <div class="alert <?php echo $message_type; ?>"><?php echo $message; ?></div>
     <?php endif; ?>
 
-    <form method="POST" class="edit-form">
+    <form id="editForm" onsubmit="event.preventDefault(); updatePassword();" class="edit-form">
+        <input type="hidden" id="editTaskId" value="<?php echo htmlspecialchars($id); ?>">
+
         <div class="field">
             <span class="label">Введите новый пароль: </span>
-            <input type="password" name="new_password" placeholder="Минимум 16 символов..." required minlength="16" autofocus>
+            <input type="password" id="editPassInput" name="new_password" placeholder="Минимум 16 символов..." required minlength="16" autofocus>
         </div>
         <button type="submit" class="btn-save">Сохранить изменения</button>
     </form>

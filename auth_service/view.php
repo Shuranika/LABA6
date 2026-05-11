@@ -1,27 +1,16 @@
 <?php
-$db_url = "http://database_service/index.php";
 $id = $_GET['id'] ?? null;
+if (!$id) { header("Location: index.php"); exit; }
 
-if (!$id) {
-    header("Location: index.php");
-    exit;
-}
+include 'db_connect.php';
 
-// Получаем данные через cURL (безопаснее для Docker)
-$ch = curl_init($db_url);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-$response = curl_exec($ch);
-curl_close($ch);
-
-$tasks = json_decode($response, true) ?: [];
 $current_task = null;
-
-// Ищем нужную задачу по ID в общем списке
-foreach ($tasks as $t) {
-    if ($t['id'] == $id) {
-        $current_task = $t;
-        break;
-    }
+try {
+    $stmt = $pdo->prepare("SELECT * FROM tasks WHERE id = ?");
+    $stmt->execute([$id]);
+    $current_task = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $error_msg = $e->getMessage();
 }
 ?>
 
@@ -54,7 +43,7 @@ foreach ($tasks as $t) {
 
         <div class="field">
             <span class="label">Полный хеш пароля (SHA-256)</span>
-            <span class="value"><?php echo htmlspecialchars($current_task['user_hash']); ?></span>
+            <span class="value"><?php echo htmlspecialchars($current_task['hash'] ?? $current_task['user_hash'] ?? 'Хеш отсутствует'); ?></span>
         </div>
 
     <?php else: ?>

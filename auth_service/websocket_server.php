@@ -46,15 +46,10 @@ while (true) {
         $received_text = unmask($buf);
         $data = json_decode($received_text, true);
 
-        if (isset($data['action']) && $data['action'] === 'refresh') {
-            echo "Получен сигнал refresh от " . ($data['senderId'] ?? 'unknown') . "\n";
+        if ($data) {
+            echo "Получены данные: " . $received_text . "\n";
 
-            $reply = json_encode([
-                'action' => 'refresh',
-                'senderId' => $data['senderId'] ?? ''
-            ]);
-
-            $response = mask($reply);
+            $response = mask($received_text);
             send_message($response);
         }
     }

@@ -64,7 +64,7 @@ jobs:
       # 6. Функциональный тест валидации
       - name: Functional Test
         run: |
-          RESPONSE=$(curl -s -X POST -d "password=123" http://localhost:80/index.php)
+          RESPONSE=$(curl -s -X POST -d "password=123" http://localhost:80,10/index.php)
           if echo "$RESPONSE" | grep -q "Слишком короткий"; then
              echo "Тест пройден: валидация работает."
           else

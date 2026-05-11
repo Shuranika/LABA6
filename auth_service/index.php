@@ -1,4 +1,6 @@
 <?php
+ob_start();
+session_start();
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
@@ -27,107 +29,93 @@ if (isset($config['imap']) && is_array($config['imap'])) {
     $message_type = "error";
 }
 
-// Читаем входные данные (JSON или POST)
 $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true);
 $data = $input ?: $_POST;
 
 $isPostman = (isset($_SERVER['HTTP_USER_AGENT']) && strpos($_SERVER['HTTP_USER_AGENT'], 'Postman') !== false);
 
-// --- 1. ЛОГИКА УДАЛЕНИЯ (БЕЗ сломанного PHP-сокета) ---
+// --- 1. ЛОГИКА УДАЛЕНИЯ ---
 if (isset($_GET['delete_id'])) {
+    include 'db_connect.php';
+    $stmt = $pdo->prepare("DELETE FROM tasks WHERE id = ?");
+    $stmt->execute([$_GET['delete_id']]);
+
     $ch = curl_init($db_url);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['id' => $_GET['delete_id']]));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 1);
     curl_exec($ch);
     curl_close($ch);
-
-    if ($isPostman) {
-        header("Content-Type: application/json");
-        echo json_encode(["message" => "Deleted successfully"]);
-        exit;
-    }
 
     header("Location: index.php");
     exit;
 }
 
-// --- 2. ОБРАБОТКА ВВОДА (POST - Регистрация) ---
-if ($method === 'POST' && isset($data['password']) && !isset($data['action'])) {
-    $password = $data['password'];
+require_once 'db_connect.php';
+// --- 2. ОБРАБОТКА ВВОДА ---
+if ($method === 'POST') {
+    if (ob_get_length()) ob_clean();
+    header('Content-Type: application/json');
 
-    if (strlen($password) < 16) {
-        http_response_code(418);
-        $message = "🫖 Слишком короткий пароль для регистрации!";
-        $message_type = "error";
-    } else {
-        $hash = hash('sha256', $password);
-        $ch = curl_init($db_url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['hash' => $hash]));
-        $result = curl_exec($ch);
-
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($http_code === 201) {
-            $message = "✅ Надежный пароль успешно сохранен в базе.";
-            $message_type = "success";
-        } elseif ($http_code === 409) {
-            $message = "⚠️ Этот пароль уже был зарегистрирован ранее.";
-            $message_type = "error";
-        } else {
-            $message = "❌ Ошибка базы данных (Код: $http_code)";
-            $message_type = "error";
-        }
-
-        if ($isPostman) {
-            header("Content-Type: application/json");
-            echo json_encode(["message" => $message, "type" => $message_type]);
-            exit;
-        }
-    }
-}
-
-if (($method === 'PUT') || ($method === 'POST' && isset($data['action']) && $data['action'] === 'update')) {
+    $password = $data['new_password'] ?? $data['password'] ?? $_POST['password'] ?? null;
     $id = $data['id'] ?? null;
-    $new_password = $data['new_password'] ?? null;
+    $action = $data['action'] ?? null;
 
-    if (!$id || !$new_password || strlen($new_password) < 16) {
+    if (!$password || strlen($password) < 16) {
         http_response_code(418);
-        $message = "🫖 Ошибка данных или пароль короче 16 символов!";
-        $message_type = "error";
-    } else {
-        $new_hash = hash('sha256', $new_password);
-        $ch = curl_init($db_url);
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['id' => $id, 'hash' => $new_hash]));
-        $result = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($http_code === 200) {
-            $message = "✅ Хеш успешно изменен!";
-            $message_type = "success";
-        } else {
-            $message = "❌ Ошибка обновления (Код: $http_code)";
-            $message_type = "error";
-        }
+        echo json_encode(["message" => "🫖 Пароль слишком короткий (мин. 16 символов)!", "type" => "error"]);
+        exit;
     }
 
-    if ($isPostman) {
-        header("Content-Type: application/json");
-        echo json_encode(["message" => $message, "type" => $message_type]);
+    $hash = hash('sha256', $password);
+
+    try {
+        if ($id && $action === 'update') {
+            // --- ЛОГИКА ОБНОВЛЕНИЯ ---
+            $check = $pdo->prepare("SELECT id FROM tasks WHERE hash = ? AND id != ?");
+            $check->execute([$hash, $id]);
+            if ($check->fetch()) {
+                http_response_code(409);
+                echo json_encode(["message" => "⚠️ Этот пароль уже используется в другой записи!", "type" => "error"]);
+                exit;
+            }
+
+            $stmt = $pdo->prepare("UPDATE tasks SET title = ?, hash = ? WHERE id = ?");
+            $stmt->execute([$hash, $hash, $id]);
+            $res_message = "✅ Данные успешно изменены!";
+        } else {
+            // --- ЛОГИКА ДОБАВЛЕНИЯ ---
+            $check = $pdo->prepare("SELECT id FROM tasks WHERE hash = ?");
+            $check->execute([$hash]);
+            if ($check->fetch()) {
+                http_response_code(409);
+                echo json_encode(["message" => "⚠️ Этот пароль уже зарегистрирован!", "type" => "error"]);
+                exit;
+            }
+
+            $stmt = $pdo->prepare("INSERT INTO tasks (title, hash) VALUES (?, ?)");
+            $stmt->execute([$hash, $hash]);
+            $res_message = "✅ Пароль успешно добавлен!";
+        }
+
+        $ch = curl_init($db_url);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $id ? "PUT" : "POST");
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['id' => $id, 'hash' => $hash]));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 1);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        curl_close($ch);
+
+        echo json_encode(["message" => $res_message, "type" => "success"]);
+        exit;
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(["message" => "❌ Ошибка БД: " . $e->getMessage(), "type" => "error"]);
         exit;
     }
 }
-
 // --- 4. ПОЛУЧЕНИЕ СПИСКА ДЛЯ ТАБЛИЦЫ ---
 $ch_get = curl_init($db_url);
 curl_setopt($ch_get, CURLOPT_RETURNTRANSFER, true);
@@ -136,13 +124,13 @@ $all_tasks_raw = curl_exec($ch_get);
 $get_status = curl_getinfo($ch_get, CURLINFO_HTTP_CODE);
 curl_close($ch_get);
 
-if (isset($_GET['status']) && $_GET['status'] === 'success') {
+/* if (isset($_GET['status']) && $_GET['status'] === 'success') {
     $message = "✅ Письмо успешно отправлено!";
     $message_type = "success";
 } elseif (isset($_GET['status']) && $_GET['status'] === 'error') {
     $message = "❌ Ошибка при отправке почты";
     $message_type = "error";
-}
+} */
 
 if ($all_tasks_raw === false || $get_status !== 200) {
     $tasks = [];
@@ -187,127 +175,153 @@ if ($method === 'GET' && $isPostman) {
 <div class="container">
     <h2>🔐 Регистрация</h2>
 
-    <?php if (!empty($message)): ?>
+    <?php if (isset($_SESSION['flash_msg'])): ?>
+        <div class="alert <?php echo $_SESSION['flash_type']; ?>">
+            <?php
+            echo $_SESSION['flash_msg'];
+            unset($_SESSION['flash_msg']);
+            unset($_SESSION['flash_type']);
+            ?>
+        </div>
+    <?php endif; ?>
+
+    <?php if (!empty($message) && !isset($_SESSION['mail_status'])): ?>
         <div class="alert <?php echo ($message_type === 'success') ? 'success' : 'error'; ?>">
             <?php echo $message; ?>
         </div>
     <?php endif; ?>
 
-    <form method="POST" onsubmit="sendRefreshSignal()">
-        <input type="password" name="password" placeholder="Минимум 16 символов..." required>
+    <form id="regForm" onsubmit="event.preventDefault(); registerPassword();">
+        <input type="password" id="passInput" placeholder="Минимум 16 символов..." required>
         <button type="submit">Добавить</button>
     </form>
+
 
     <table>
         <thead>
         <tr>
-            <th style="width: 10%;">ID</th>
-            <th style="width: 30%;">Действие</th>
-            <th style="width: 60%; text-align: center;">Отправить Email</th>
+            <th style="width: 15%;">ID</th>
+            <th style="width: 35%;">Действие</th>
+            <th style="width: 50%; text-align: center;">Отправить Email</th>
         </tr>
         </thead>
         <tbody>
-        <?php if (empty($tasks)): ?>
-            <tr><td colspan="3" style="text-align:center;">Список пуст или база недоступна</td></tr>
-        <?php else: ?>
-            <?php foreach ($tasks as $task): ?>
-                <tr>
-                    <td>
-                        <a href="view.php?id=<?php echo $task['id']; ?>"
-                           style="color: #1a73e8; font-weight: bold; text-decoration: none;">
-                            #<?php echo htmlspecialchars($task['id']); ?>
-                        </a>
-                    </td>
-
-                    <td style="white-space: nowrap;">
-                        <a href="edit.php?id=<?php echo $task['id']; ?>"
-                           style="color: #1a73e8; text-decoration: none;" onclick="sendRefreshSignal()">Изменить</a>
-                        <span style="color: #ccc; margin: 0 5px;">|</span>
-                        <a href="#"
-                           class="btn-delete"
-                           onclick="event.preventDefault(); deleteAndRefresh(<?php echo $task['id']; ?>);">Удалить</a>
-                    </td>
-
-                    <td style="text-align: right; padding: 10px;">
-                        <form action="mail_handler.php" method="POST" style="display:flex; flex-direction:column; gap:8px; margin:0; width: 220px; margin-left: auto;">
-                            <input type="hidden" name="task_id" value="<?= $task['id'] ?>">
-                            <input type="hidden" name="task_hash" value="<?= $task['user_hash'] ?>">
-
-                            <input type="email" name="target_email" placeholder="Кому (Email)..." required
-                                   style="padding: 8px; border: 2px solid #ddd; border-radius: 8px; font-size: 12px;">
-
-                            <textarea name="custom_message" placeholder="Ваше сообщение..."
-                                      style="padding: 8px; border: 2px solid #ddd; border-radius: 8px; font-size: 12px; resize: none; height: 50px; font-family: inherit;"></textarea>
-
-                            <button type="submit" name="send_email"
-                                    style="padding: 8px; background: #1a73e8; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: background 0.3s;">
-                                Отправить письмо
-                            </button>
-                        </form>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-        <?php endif; ?>
+        <?php include 'get_tasks_partial.php'; ?>
         </tbody>
     </table>
 </div>
 
 <script>
     const clientId = "client_" + Math.random().toString(36).substr(2, 9);
-
     window.socket = new WebSocket('ws://localhost:8080');
 
-    window.socket.onopen = function() {
-        console.log("Соединение установлено. ID клиента: " + clientId);
-    };
-
-    window.socket.onmessage = function(event) {
+    socket.onmessage = function(event) {
         try {
             const data = JSON.parse(event.data);
-            if (data.action === 'refresh' && data.senderId !== clientId) {
-                console.log("Получен сигнал от другого окна. Обновляюсь без кэша...");
-                window.location.href = window.location.pathname + '?t=' + Date.now();
+            if (data.senderId === clientId) return;
+
+            if (data.action === 'delete') {
+                const row = document.getElementById('task-' + data.taskId);
+                if (row) row.remove();
             }
-        } catch (e) {
-            console.error("Ошибка при получении данных:", e);
-        }
+            else {
+                updateTableData();
+            }
+        } catch (e) { console.error("Ошибка:", e); }
     };
 
-    window.socket.onerror = function(error) {
-        console.log("Сервер сокетов недоступен (порт 8080 отключен).");
-    };
+
+    function registerPassword() {
+        const password = document.getElementById('passInput').value;
+
+        if (password.length < 16) {
+            alert("Пароль слишком короткий!");
+            return;
+        }
+
+        fetch('index.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                password: password
+            })
+        })
+            .then(response => {
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    return response.json().then(data => {
+                        if (!response.ok) {
+                            alert(data.message || "Ошибка сервера");
+                        } else {
+                            alert(data.message);
+                            document.getElementById('passInput').value = '';
+                            sendRefreshSignal();
+                        }
+                    });
+                } else {
+                    return response.text().then(text => {
+                        console.error("Сервер вернул не JSON:", text);
+                        alert("Ошибка на стороне сервера. Проверьте консоль.");
+                    });
+                }
+            })
+            .catch(err => {
+                console.error("Ошибка запроса:", err);
+                alert("Не удалось связаться с сервером.");
+            });
+    }
 
     function sendRefreshSignal() {
         if (window.socket && window.socket.readyState === WebSocket.OPEN) {
             window.socket.send(JSON.stringify({
-                action: 'refresh',
+                action: 'add',
                 senderId: clientId
             }));
-            console.log("Сигнал отправлен на сервер сокетов");
         }
-        return true;
+        updateTableData();
     }
 
     function deleteAndRefresh(taskId) {
-        if (!confirm('Удалить запись # ' + taskId + '?')) {
-            return;
-        }
+        if (!confirm('Удалить запись #' + taskId + '?')) return;
+
+        const row = document.getElementById('task-' + taskId);
+        if (row) row.style.opacity = '0.5';
 
         fetch('?delete_id=' + taskId)
             .then(response => {
-                console.log("Запись удалена из базы.");
-                if (window.socket && window.socket.readyState === WebSocket.OPEN) {
-                    window.socket.send(JSON.stringify({
-                        action: 'refresh',
-                        senderId: clientId
-                    }));
+                if (response.ok) {
+                    if (row) row.remove();
+
+                    alert("✅ Запись #" + taskId + " успешно удалена!");
+
+                    if (window.socket && window.socket.readyState === WebSocket.OPEN) {
+                        window.socket.send(JSON.stringify({
+                            action: 'delete',
+                            taskId: taskId,
+                            senderId: clientId
+                        }));
+                    }
+                } else {
+                    alert("❌ Ошибка при удалении");
+                    if (row) row.style.opacity = '1';
                 }
-                setTimeout(() => {
-                    window.location.href = window.location.pathname + '?t=' + Date.now();
-                }, 150);
             })
-            .catch(error => {
-                console.error("Ошибка при удалении:", error);
+            .catch(err => {
+                console.error("Ошибка:", err);
+                if (row) row.style.opacity = '1';
+            });
+    }
+    function updateTableData() {
+        fetch('get_tasks_partial.php')
+            .then(response => response.text())
+            .then(html => {
+                const tbody = document.querySelector('table tbody');
+                if (tbody) {
+                    tbody.innerHTML = html;
+                    console.log("Таблица обновлена синхронно");
+                }
             });
     }
 </script>
