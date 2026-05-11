@@ -37,7 +37,7 @@ jobs:
           # Сборка образов с использованием секретов для тегов
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db ./mysql_db
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/database-service ./database_service
-          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/auth-app ./auth_service
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/auth-container ./auth_service
 
           # Запуск MySQL
           docker run -d --name mysql_db --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
@@ -46,7 +46,7 @@ jobs:
           docker run -d --name database_service --network lab_network ${{ secrets.DOCKERHUB_USERNAME }}/database-service
           
           # Запуск основного приложения (Auth App)
-          docker run -d --name auth_app --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
+          docker run -d --name auth-container --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-container
 
       # 5. Ждем, пока сайт и БД будут полностью готовы
       - name: Wait for Services
@@ -86,12 +86,12 @@ jobs:
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/mysql-db
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/database-service
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/auth-app
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/auth-container
 
       # 8. Очистка ресурсов
       - name: Shutdown and Cleanup
         if: always()
         run: |
-          docker stop auth_app database_service mysql_db || true
-          docker rm auth_app database_service mysql_db || true
+          docker stop auth-container database_service mysql_db || true
+          docker rm auth-container database_service mysql_db || true
           docker network rm lab_network || true
