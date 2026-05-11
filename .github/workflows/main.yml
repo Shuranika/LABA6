@@ -65,22 +65,27 @@ jobs:
           echo "Проверка главной страницы..."
           curl -f http://localhost:80/index.php || exit 1
 
-      # 6. Функциональный тест: Проверка валидации пароля (JSON)
-      - name: Functional Test (JSON Validation)
+      # 6. Функциональный тест валидации
+      - name: Functional Test
         run: |
-          # Отправляем JSON запрос с коротким паролем
-          RESPONSE=$(curl -s -X POST \
+          # Отправляем JSON и сохраняем HTTP статус и тело ответа
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Content-Type: application/json" \
-            -d '{"password": "too_short_pass"}' \
+            -d '{"password": "123"}' \
             http://localhost:80/index.php)
           
-          echo "Ответ от сервера: $RESPONSE"
+          # Разделяем тело и код
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          STATUS=$(echo "$RESPONSE" | tail -n1)
           
-          # Проверяем, что сервер вернул ошибку валидации (сообщение о коротком пароле)
-          if echo "$RESPONSE" | grep -q "короткий"; then
-              echo "✅ Тест пройден: валидация JSON работает корректно."
+          echo "Статус ответа: $STATUS"
+          echo "Тело ответа: $BODY"
+
+          # Проверяем код 418 (I'm a teapot), который мы задали в PHP для ошибок валидации
+          if [ "$STATUS" -eq 418 ]; then
+              echo "✅ Тест пройден: валидация сработала (HTTP 418)."
           else
-              echo "❌ Тест провален: сервер не вернул ошибку на короткий пароль."
+              echo "❌ Тест провален: ожидался статус 418, получен $STATUS."
               exit 1
           fi
 
