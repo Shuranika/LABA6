@@ -48,38 +48,29 @@ jobs:
           # Запуск основного приложения (Auth App)
           docker run -d --name auth-container --network lab_network -p 80:80 ${{ secrets.DOCKERHUB_USERNAME }}/auth-container
 
-    Ты практически у цели! В твоем YAML-файле всё выглядит логично, но есть одна техническая деталь в Шаге 5, которая вызывает ту самую ошибку 56.
-    
-    Когда curl сталкивается с тем, что контейнер еще не готов (соединение сбрасывается), он завершает работу с ошибкой, и весь пайплайн останавливается, не успев сделать следующую попытку в цикле.
-
-    Вот финальный вариант Шага 5, который проигнорирует сетевые ошибки и дождется запуска:
-
-    Исправленный блок ожидания (Шаг 5)
-    YAML
-    # 5. Ждем, пока сайт и БД будут полностью готовы
-    - name: Wait for Services
-    run: |
-      echo "Ожидание полной готовности (PHP + MySQL)..."
-      # Даем небольшую паузу сразу после старта
-      sleep 10
-      
-      for i in {1..20}; do
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/index.php || echo "000")
-      
-        if [ "$STATUS" -eq 200 ]; then
-          echo "✅ Все сервисы готовы (HTTP 200)!"
-          break
-        fi
-      
-        echo "Попытка $i: Статус сервера [$STATUS]. Ждем..."
-        sleep 5
-      
-        if [ $i -eq 20 ]; then
-          echo "❌ Сервисы не поднялись за отведенное время."
-          docker logs auth-container
-          exit 1
-        fi
-      done
+      # 5. Ждем, пока сайт и БД будут полностью готовы
+      - name: Wait for Services
+        run: |
+          echo "Ожидание полной готовности (PHP + MySQL)..."
+          sleep 10
+          
+          for i in {1..20}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/index.php || echo "000")
+          
+            if [ "$STATUS" -eq 200 ]; then
+              echo "✅ Все сервисы готовы (HTTP 200)!"
+              break
+            fi
+          
+            echo "Попытка $i: Статус сервера [$STATUS]. Ждем..."
+            sleep 5
+          
+            if [ $i -eq 20 ]; then
+              echo "❌ Сервисы не поднялись за отведенное время."
+              docker logs auth-container
+              exit 1
+            fi
+          done
 
       # 6. Функциональный тест (проверка на короткий пароль)
       - name: Functional Test
